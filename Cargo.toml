@@ -1,5 +1,5 @@
 [package]
-name = "read_layers_rs"
+name = "read_layers"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,9 +8,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 glob = "*"
-ndarray = { version = "0.15.4", features = ["rayon"] }
+ndarray = { version = "0.15.6", features = ["rayon"] }
 numpy = "*"
-pyo3 = { version = "0.16.5", features = ["extension-module"] }
+pyo3 = { version = "0.18.1", features = ["extension-module"] }
 csv = "*"
 ndarray-csv = "*"
 rayon = "*"

@@ -1,14 +1,27 @@
 use numpy::{IntoPyArray, PyArray2};
 use pyo3::prelude::{pymodule, PyModule, PyResult, Python};
-use pyo3::types::PyString;
+use pyo3::types::{PyString, PyList};
+use std::path::Path;
 
 
 #[pymodule]
-fn read_layers_rs(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn read_layers(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
 
     #[pyfn(m)]
     fn read_layers<'py>(py: Python<'py>, folder: &PyString) -> &'py PyArray2<f64> {
         rust_fn::read_layers(folder.to_str().unwrap()).into_pyarray(py)
+    }
+
+    #[pyfn(m)]
+    fn read_selected_layers<'py>(py: Python<'py>, file_list: &PyList) -> &'py PyArray2<f64> {
+        rust_fn::read_selected_layers(
+            file_list.iter().map(|x| Path::new(&(*x).str().unwrap().to_string()).to_path_buf()).collect()
+    ).into_pyarray(py)
+    }
+
+    #[pyfn(m)]
+    fn read_layer<'py>(py: Python<'py>, file: &PyString) -> &'py PyArray2<f64> {
+        rust_fn::read_layer(file.to_str().unwrap()).into_pyarray(py)
     }
 
     Ok(())
@@ -18,7 +31,7 @@ fn read_layers_rs(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
 mod rust_fn {
     use rayon::prelude::*;
     use glob::{glob, GlobError};
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::error::Error;
     use std::fs::File;
     use csv::{ReaderBuilder};
@@ -64,8 +77,71 @@ mod rust_fn {
 
         let mut out_array = concatenate(
             Axis(1),
-            &[ concatenate(Axis(0), &array_views).unwrap().slice_axis(Axis(1), Slice::from(0..3)),
-               concatenate(Axis(0), &padding_array_views).unwrap().view() ]
+            &[ concatenate(Axis(0), &array_views).unwrap().slice_axis(Axis(1), Slice::from(0..2)),
+               concatenate(Axis(0), &padding_array_views).unwrap().view(),
+               concatenate(Axis(0), &array_views).unwrap().slice_axis(Axis(1), Slice::from(2..4)) ]
+        ).unwrap();
+
+        out_array.column_mut(0).par_map_inplace(correct_x);
+        out_array.column_mut(1).par_map_inplace(correct_y);
+
+        out_array
+    }
+
+    pub fn read_selected_layers(file_list: Vec<PathBuf>) -> Array2<f64> {
+        let len: usize = file_list.len();
+        let bar = ProgressBar::new(len as u64);
+        let mut arrays: Vec<Array2<f64>> = vec![Array2::<f64>::zeros((0, 0)); len];
+        let mut z_vals: Vec<f64> = vec![0.; len];
+        let mut z_lens: Vec<usize> = vec![0; len];
+        file_list.par_iter()
+                     .zip(arrays.par_iter_mut())
+                     .zip(z_vals.par_iter_mut())
+                     .zip(z_lens.par_iter_mut())
+                     .for_each(|(((filepath, array_element), z_vals_element), z_lens_element)| {
+            let (array, z, z_len) = read_file(filepath.to_path_buf()).unwrap();
+            *array_element = array;
+            *z_vals_element = z;
+            *z_lens_element = z_len;
+            bar.inc(1)
+        });
+
+        let mut padding_arrays: Vec<Array2<f64>> = Vec::<Array2<f64>>::new();
+        for (z, z_len) in z_vals.iter().zip(z_lens) {
+            let z_array: Array2::<f64> = Array2::from_elem((z_len, 1), *z);
+            padding_arrays.push(z_array);
+        }
+
+        let padding_array_views: Vec<ArrayView2<f64>> = padding_arrays.iter()
+                                                                      .map(|x| x.view())
+                                                                      .collect();
+        let array_views: Vec<ArrayView2<f64>> = arrays.iter()
+                                                      .map(|x| x.view())
+                                                      .collect();
+
+        let mut out_array = concatenate(
+            Axis(1),
+            &[ concatenate(Axis(0), &array_views).unwrap().slice_axis(Axis(1), Slice::from(0..2)),
+               concatenate(Axis(0), &padding_array_views).unwrap().view(),
+               concatenate(Axis(0), &array_views).unwrap().slice_axis(Axis(1), Slice::from(2..4)) ]
+        ).unwrap();
+
+        out_array.column_mut(0).par_map_inplace(correct_x);
+        out_array.column_mut(1).par_map_inplace(correct_y);
+
+        out_array
+    }
+
+    pub fn read_layer(file: &str) -> Array2<f64> {
+        let (array, z, z_len) = read_file(Path::new(file).to_path_buf()).unwrap();
+        let z_array: Array2::<f64> = Array2::from_elem((z_len, 1), z);
+        let z_array_view: ArrayView2<f64> = z_array.view();
+        let array_view: ArrayView2<f64> = array.view();
+
+        let mut out_array = concatenate(
+            Axis(1),
+            &[ array_view,
+               z_array_view ]
         ).unwrap();
 
         out_array.column_mut(0).par_map_inplace(correct_x);
